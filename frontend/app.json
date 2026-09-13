@@ -1,0 +1,17 @@
+{
+  "expo": {
+    "name": "SafeNavi",
+    "slug": "safenavi",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "assetBundlePatterns": ["**/*"],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.safenavi.app"
+    },
+    "android": {
+      "package": "com.safenavi.app"
+    }
+  }
+}

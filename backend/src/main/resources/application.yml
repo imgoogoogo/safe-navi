@@ -1,0 +1,4 @@
+# TODO: DataSource / JPA / Redis / Security 설정은 다음 단계에서 작성
+spring:
+  application:
+    name: safenavi-backend

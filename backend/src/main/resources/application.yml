@@ -1,4 +1,105 @@
-# TODO: DataSource / JPA / Redis / Security 설정은 다음 단계에서 작성
 spring:
   application:
-    name: safenavi-backend
+    name: safe-navi-project
+  datasource:
+    url: ${DB_URL:jdbc:mysql://localhost:3306/safenavi?serverTimezone=Asia/Seoul&characterEncoding=UTF-8&rewriteBatchedStatements=true}
+    username: ${DB_USERNAME:safenavi}
+    password: ${DB_PASSWORD}
+  sql:
+    init:
+      # schema.sql uses plain CREATE TABLE, so run it once on an empty DB (DB_SCHEMA_INIT=always) and leave it off afterwards
+      mode: ${DB_SCHEMA_INIT:never}
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+      naming:
+        # schema.sql uses camelCase columns (createdAt, nodeAId); keep names exactly as mapped
+        physical-strategy: org.hibernate.boot.model.naming.PhysicalNamingStrategyStandardImpl
+  servlet:
+    multipart:
+      max-file-size: 10MB
+      max-request-size: 12MB
+
+jwt:
+  secret: ${JWT_SECRET}
+  access-expiration: 30m
+  refresh-expiration: 14d
+
+cors:
+  allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:3000,http://localhost:5173}
+
+aws:
+  s3:
+    bucket: ${AWS_S3_BUCKET:safenavi-reports}
+    region: ${AWS_REGION:ap-northeast-2}
+    # Optional CDN/custom domain in front of the bucket; defaults to the virtual-hosted S3 URL
+    public-base-url: ${AWS_S3_PUBLIC_BASE_URL:}
+  credentials:
+    # Empty -> the SDK default chain (env vars, profile, instance role) is used
+    access-key: ${AWS_ACCESS_KEY_ID:}
+    secret-key: ${AWS_SECRET_ACCESS_KEY:}
+
+geo:
+  nominatim:
+    base-url: https://nominatim.openstreetmap.org
+    # Nominatim usage policy requires an identifying User-Agent with contact info
+    user-agent: ${NOMINATIM_USER_AGENT:SafeNavi/0.1 (set NOMINATIM_USER_AGENT with a contact address)}
+    timeout: 5s
+  # Address -> coordinate for public-data sources that only publish addresses (police)
+  kakao:
+    base-url: https://dapi.kakao.com
+    rest-api-key: ${KAKAO_REST_API_KEY:}
+    timeout: 5s
+
+public-data:
+  service-key: ${PUBLIC_DATA_SERVICE_KEY:}
+  cron: ${PUBLIC_DATA_SYNC_CRON:0 0 4 * * *}
+  page-size: 1000
+  timeout: 30s
+  sources:
+    # MOIS CCTV info service; the API caps numOfRows at 100 regardless of page-size
+    - name: cctv-info
+      facility-type: cctv
+      format: json
+      # Append a filter to sync one area only, e.g. ?cond[OPN_ATMY_GRP_CD::EQ]=5050000
+      url: ${PUBLIC_DATA_CCTV_URL:https://apis.data.go.kr/1741000/cctv_info/info}
+      id-field: MNG_NO
+      lat-field: WGS84_LAT
+      lng-field: WGS84_LOT
+      enabled: ${PUBLIC_DATA_CCTV_ENABLED:true}
+    - name: streetlight-standard
+      facility-type: streetlight
+      format: json
+      # Append a filter to sync one area only, e.g. ?insttCode=5050000
+      url: ${PUBLIC_DATA_STREETLIGHT_URL:https://api.data.go.kr/openapi/tn_pubr_public_scrty_lmp_api}
+      lat-field: latitude
+      lng-field: longitude
+      enabled: ${PUBLIC_DATA_STREETLIGHT_ENABLED:true}
+    - name: emergency-medical
+      facility-type: emergencyMedical
+      format: xml
+      url: https://apis.data.go.kr/B552657/ErmctInfoInqireService/getEgytListInfoInqire
+      id-field: hpid
+      lat-field: wgs84Lat
+      lng-field: wgs84Lon
+      enabled: true
+    - name: guardian-house
+      facility-type: guardianHouse
+      format: json
+      url: ${PUBLIC_DATA_GUARDIAN_HOUSE_URL:https://api.data.go.kr/openapi/tn_pubr_public_female_safety_prtchouse_api}
+      lat-field: latitude
+      lng-field: longitude
+      enabled: ${PUBLIC_DATA_GUARDIAN_HOUSE_ENABLED:true}
+    # Address-only dataset (no coordinates): each address is geocoded through geo.kakao
+    - name: police
+      facility-type: police
+      format: odcloud
+      url: ${PUBLIC_DATA_POLICE_URL:https://api.odcloud.kr/api/15077036/v1/uddi:6b371c66-09a5-4efd-8445-bfd53672542e}
+      id-field: 주소
+      address-field: 주소
+      enabled: ${PUBLIC_DATA_POLICE_ENABLED:true}
+
+graph-build:
+  # Default OSM extract used when the admin request does not name one
+  pbf-path: ${GRAPH_BUILD_PBF_PATH:}

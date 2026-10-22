@@ -1,11 +1,12 @@
 plugins {
     id 'java'
-    id 'org.springframework.boot' version '3.3.4'
-    id 'io.spring.dependency-management' version '1.1.6'
+    id 'org.springframework.boot' version '4.1.1'
+    id 'io.spring.dependency-management' version '1.1.7'
 }
 
 group = 'com.safenavi'
 version = '0.0.1-SNAPSHOT'
+description = 'safe-navi-project'
 
 java {
     toolchain {
@@ -13,52 +14,56 @@ java {
     }
 }
 
-configurations {
-    compileOnly {
-        extendsFrom annotationProcessor
+repositories {
+    mavenCentral()
+    // osm4j is published only to the topobyte repository
+    maven {
+        url = 'https://mvn.topobyte.de'
+        content { includeGroup 'de.topobyte' }
+    }
+    maven {
+        url = 'https://mvn.slimjars.com'
+        content { includeGroup 'com.slimjars.trove4j' }
     }
 }
 
-repositories {
-    mavenCentral()
+ext {
+    jjwtVersion = '0.13.0'
+    osm4jVersion = '1.4.1'
+    awsSdkVersion = '2.55.6'
+}
+
+dependencyManagement {
+    imports {
+        mavenBom "software.amazon.awssdk:bom:${awsSdkVersion}"
+    }
 }
 
 dependencies {
-    // Web
-    implementation 'org.springframework.boot:spring-boot-starter-web'
-
-    // Spring Data JPA
+    implementation 'org.springframework.boot:spring-boot-starter-webmvc'
     implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
-
-    // Spring Security
     implementation 'org.springframework.boot:spring-boot-starter-security'
-
-    // Spring WebSocket (STOMP)
     implementation 'org.springframework.boot:spring-boot-starter-websocket'
-
-    // Redis
-    implementation 'org.springframework.boot:spring-boot-starter-data-redis'
-
-    // Validation
     implementation 'org.springframework.boot:spring-boot-starter-validation'
-
-    // JWT
-    implementation 'io.jsonwebtoken:jjwt-api:0.12.6'
-    runtimeOnly 'io.jsonwebtoken:jjwt-impl:0.12.6'
-    runtimeOnly 'io.jsonwebtoken:jjwt-jackson:0.12.6'
-
-    // JGraphT
-    implementation 'org.jgrapht:jgrapht-core:1.5.2'
-
-    // MySQL
+    // WebClient only (Nominatim, public data APIs); the app itself stays on servlet MVC
+    implementation 'org.springframework.boot:spring-boot-starter-webflux'
     runtimeOnly 'com.mysql:mysql-connector-j'
 
-    // Lombok
-    compileOnly 'org.projectlombok:lombok'
-    annotationProcessor 'org.projectlombok:lombok'
+    implementation "io.jsonwebtoken:jjwt-api:${jjwtVersion}"
+    runtimeOnly "io.jsonwebtoken:jjwt-impl:${jjwtVersion}"
+    runtimeOnly "io.jsonwebtoken:jjwt-jackson:${jjwtVersion}"
 
-    // Test
+    implementation 'jakarta.xml.bind:jakarta.xml.bind-api'
+    runtimeOnly 'org.glassfish.jaxb:jaxb-runtime'
+
+    implementation "de.topobyte:osm4j-core:${osm4jVersion}"
+    implementation "de.topobyte:osm4j-pbf:${osm4jVersion}"
+    implementation 'org.locationtech.jts:jts-core:1.20.0'
+    implementation 'org.eclipse.collections:eclipse-collections:13.0.0'
+    implementation 'software.amazon.awssdk:s3'
+
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    testImplementation 'org.springframework.boot:spring-boot-starter-webmvc-test'
     testImplementation 'org.springframework.security:spring-security-test'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }

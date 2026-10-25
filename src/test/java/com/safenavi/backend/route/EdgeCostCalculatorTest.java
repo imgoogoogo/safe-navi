@@ -27,22 +27,37 @@ class EdgeCostCalculatorTest {
         return new FacilitySpatialIndex(facilities, new LocalProjection(37.5, 127.0), new GeometryFactory());
     }
 
-    @Test
-    void noFacilitiesGivesMaximumPenalty() {
-        double cost = calculator.calculate(segment, presets.resolve("cctv"), index(List.of()));
-
-        assertThat(cost).isCloseTo(segment.getDistanceMeters() * (1 + 0.5 * 0.9), within(1e-6));
+    private static List<Facility> cctvs(int n) {
+        List<Facility> cctvs = new ArrayList<>();
+        for (int i = 0; i < n; i++) {
+            cctvs.add(new Facility("cctv", 37.5 + i * 0.0002, 127.0001, "c" + i, "test", "11680"));
+        }
+        return cctvs;
     }
 
     @Test
-    void saturatedFacilitiesGiveMinimumPenalty() {
-        List<Facility> cctvs = new ArrayList<>();
-        for (int i = 0; i < 5; i++) {
-            cctvs.add(new Facility("cctv", 37.5 + i * 0.0002, 127.0001, "c" + i, "test", "11680"));
-        }
-        double cost = calculator.calculate(segment, presets.resolve("cctv"), index(cctvs));
+    void noFacilitiesGivesFullPenalty() {
+        double cost = calculator.calculate(segment, presets.resolve("cctv"), index(List.of()));
 
-        assertThat(cost).isCloseTo(segment.getDistanceMeters() * (1 + 0.5 * 0.1), within(1e-6));
+        assertThat(cost).isCloseTo(segment.getDistanceMeters() * 2.0, within(1e-6));
+    }
+
+    @Test
+    void penaltyFollowsRawCount() {
+        double cost = calculator.calculate(segment, presets.resolve("cctv"), index(cctvs(2)));
+
+        // weighted count 2 -> surcharge 1/3
+        assertThat(cost).isCloseTo(segment.getDistanceMeters() * (1 + 1.0 / 3), within(1e-6));
+    }
+
+    @Test
+    void everyExtraFacilityLowersCost() {
+        double previous = Double.MAX_VALUE;
+        for (int n = 0; n <= 5; n++) {
+            double cost = calculator.calculate(segment, presets.resolve("cctv"), index(cctvs(n)));
+            assertThat(cost).isLessThan(previous);
+            previous = cost;
+        }
     }
 
     @Test
@@ -51,7 +66,7 @@ class EdgeCostCalculatorTest {
         List<Facility> far = List.of(new Facility("cctv", 37.5005, 127.01, "far", "test", "11680"));
         double cost = calculator.calculate(segment, presets.resolve("cctv"), index(far));
 
-        assertThat(cost).isCloseTo(segment.getDistanceMeters() * 1.45, within(1e-6));
+        assertThat(cost).isCloseTo(segment.getDistanceMeters() * 2.0, within(1e-6));
     }
 
     @Test

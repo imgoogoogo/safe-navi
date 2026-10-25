@@ -136,14 +136,14 @@ public class RouteService {
         return polyline;
     }
 
-    /** Graph, snapped endpoints and facility index of one request, with per-segment scores cached across presets. */
+    /** Graph, snapped endpoints and facility index of one request, with per-segment facility counts cached across presets. */
     private final class RoutingContext {
 
         private final Subgraph graph;
         private final RoadNode start;
         private final RoadNode end;
         private final FacilitySpatialIndex index;
-        private final Map<Long, Map<FacilityType, Double>> typeScoreCache = new HashMap<>();
+        private final Map<Long, Map<FacilityType, Integer>> countCache = new HashMap<>();
         private final Map<FacilityType, Double> scoreWeights = presetWeightResolver.resolve(PresetWeightResolver.DEFAULT).weights();
 
         RoutingContext(Subgraph graph, RoadNode start, RoadNode end, FacilitySpatialIndex index) {
@@ -161,7 +161,7 @@ public class RouteService {
             Map<Long, Double> costs = new HashMap<>();
             return dijkstraRouter.findShortestPath(graph.adjacency(), start.getId(), end.getId(),
                             edge -> costs.computeIfAbsent(edge.segment().getId(),
-                                    id -> edgeCostCalculator.cost(edge.segment(), typeScores(edge.segment()), preset)))
+                                    id -> edgeCostCalculator.cost(edge.segment(), counts(edge.segment()), preset)))
                     .orElseThrow(() -> new BusinessException(ErrorCode.ROUTE_NOT_FOUND));
         }
 
@@ -169,14 +169,15 @@ public class RouteService {
             return Math.round(path.edges().stream().mapToDouble(e -> e.segment().getDistanceMeters()).sum() * 10) / 10.0;
         }
 
-        /** Length-weighted default-preset safety along the path, 0-100. */
+        /** Length-weighted default-preset density safety along the path, 0-100 (not the count-based routing cost). */
         double safetyScore(PathResult path) {
             double length = 0;
             double weighted = 0;
             for (Edge edge : path.edges()) {
                 double d = edge.segment().getDistanceMeters();
                 length += d;
-                weighted += d * SafetyScoreCalculator.weightedAverage(typeScores(edge.segment()), scoreWeights);
+                weighted += d * SafetyScoreCalculator.weightedAverage(
+                        SafetyScoreCalculator.typeScores(counts(edge.segment()), d), scoreWeights);
             }
             if (length == 0) {
                 return 0.0;
@@ -184,8 +185,8 @@ public class RouteService {
             return Math.round(weighted / length * 1000) / 10.0;
         }
 
-        private Map<FacilityType, Double> typeScores(RoadSegment segment) {
-            return typeScoreCache.computeIfAbsent(segment.getId(), id -> edgeCostCalculator.typeScores(segment, index));
+        private Map<FacilityType, Integer> counts(RoadSegment segment) {
+            return countCache.computeIfAbsent(segment.getId(), id -> edgeCostCalculator.facilityCounts(segment, index));
         }
     }
 }

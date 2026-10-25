@@ -8,6 +8,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -18,8 +19,10 @@ import org.springframework.stereotype.Service;
 
 import com.safenavi.backend.common.exception.BusinessException;
 import com.safenavi.backend.common.exception.ErrorCode;
+import com.safenavi.backend.common.geo.Coordinate;
 import com.safenavi.backend.facility.FacilityRepository;
 import com.safenavi.backend.facility.FacilityType;
+import com.safenavi.backend.geo.AddressGeocoder;
 import com.safenavi.backend.region.RegionCodeResolver;
 import com.safenavi.backend.sync.PublicDataProperties.Source;
 import com.safenavi.backend.sync.SyncResult.SourceResult;
@@ -43,15 +46,18 @@ public class PublicDataSyncService {
     private final FacilityUpsertWriter writer;
     private final FacilityRepository facilityRepository;
     private final RegionCodeResolver regionCodeResolver;
+    private final AddressGeocoder addressGeocoder;
     private final AtomicBoolean running = new AtomicBoolean(false);
 
     public PublicDataSyncService(PublicDataProperties properties, PublicDataClient client, FacilityUpsertWriter writer,
-            FacilityRepository facilityRepository, RegionCodeResolver regionCodeResolver) {
+            FacilityRepository facilityRepository, RegionCodeResolver regionCodeResolver,
+            AddressGeocoder addressGeocoder) {
         this.properties = properties;
         this.client = client;
         this.writer = writer;
         this.facilityRepository = facilityRepository;
         this.regionCodeResolver = regionCodeResolver;
+        this.addressGeocoder = addressGeocoder;
     }
 
     public boolean isRunning() {
@@ -120,7 +126,7 @@ public class PublicDataSyncService {
         }
     }
 
-    private static String validate(Source source) {
+    private String validate(Source source) {
         if (source.name() == null || source.name().isBlank() || source.name().length() > 30) {
             return "name must be 1-30 characters";
         }
@@ -130,15 +136,31 @@ public class PublicDataSyncService {
         if (source.url() == null || source.url().isBlank()) {
             return "url is not configured";
         }
+        if (source.addressField() != null) {
+            return addressGeocoder.isConfigured() ? null : "address-field needs KAKAO_REST_API_KEY for geocoding";
+        }
         if (source.latField() == null || source.lngField() == null) {
-            return "lat-field and lng-field are required";
+            return "lat-field and lng-field, or address-field, are required";
         }
         return null;
     }
 
     FacilityRecord toRecord(Source source, Map<String, String> item) {
-        Double lat = parse(item.get(source.latField()));
-        Double lng = parse(item.get(source.lngField()));
+        Double lat;
+        Double lng;
+        if (source.addressField() != null) {
+            Optional<Coordinate> point = addressGeocoder.geocode(item.get(source.addressField()));
+            if (point.isEmpty()) {
+                log.warn("Public data sync {}: no coordinate for address '{}'", source.name(),
+                        item.get(source.addressField()));
+                return null;
+            }
+            lat = point.get().lat();
+            lng = point.get().lng();
+        } else {
+            lat = parse(item.get(source.latField()));
+            lng = parse(item.get(source.lngField()));
+        }
         if (lat == null || lng == null) {
             return null;
         }

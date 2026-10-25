@@ -6,6 +6,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
@@ -24,6 +25,8 @@ import tools.jackson.databind.json.JsonMapper;
 @Component
 public class PublicDataClient {
 
+    /** Standard-data APIs answer "00"; newer apis.data.go.kr services (e.g. MOIS CCTV) answer "0". */
+    private static final Set<String> JSON_OK_CODES = Set.of("00", "0");
     private static final String OK_CODE = "00";
 
     private final PublicDataProperties properties;
@@ -49,6 +52,9 @@ public class PublicDataClient {
         if (body == null || body.isBlank()) {
             throw new PublicDataException(source.name() + ": empty response");
         }
+        if (source.isOdcloud()) {
+            return parseOdcloud(source, body);
+        }
         return source.isXml() ? parseXml(source, body) : parseJson(source, body);
     }
 
@@ -58,11 +64,14 @@ public class PublicDataClient {
      */
     private URI buildUri(Source source, int pageNo) {
         UriComponentsBuilder builder = UriComponentsBuilder.fromUriString(source.url())
-                .queryParam("serviceKey", "{serviceKey}")
-                .queryParam("pageNo", pageNo)
-                .queryParam("numOfRows", properties.pageSize());
-        if (!source.isXml()) {
-            builder.queryParam("type", "json");
+                .queryParam("serviceKey", "{serviceKey}");
+        if (source.isOdcloud()) {
+            builder.queryParam("page", pageNo).queryParam("perPage", properties.pageSize());
+        } else {
+            builder.queryParam("pageNo", pageNo).queryParam("numOfRows", properties.pageSize());
+            if (!source.isXml()) {
+                builder.queryParam("type", "json");
+            }
         }
         return builder.encode().buildAndExpand(Map.of("serviceKey", properties.serviceKey())).toUri();
     }
@@ -73,9 +82,11 @@ public class PublicDataClient {
             throw new PublicDataException(source.name() + ": API error " + abbreviate(body));
         }
         try {
-            JsonNode response = jsonMapper.readTree(body).path("response");
+            // Some APIs wrap header/body in "response", others return them at the root
+            JsonNode root = jsonMapper.readTree(body);
+            JsonNode response = root.has("response") ? root.get("response") : root;
             String code = response.path("header").path("resultCode").asString("");
-            if (!OK_CODE.equals(code)) {
+            if (!JSON_OK_CODES.contains(code)) {
                 throw new PublicDataException(source.name() + ": resultCode=" + code + " "
                         + response.path("header").path("resultMsg").asString(""));
             }
@@ -91,6 +102,23 @@ public class PublicDataClient {
                 rows.add(flatten(items));
             }
             return new PublicDataPage(rows, bodyNode.path("totalCount").asInt(0));
+        } catch (JacksonException e) {
+            throw new PublicDataException(source.name() + ": invalid JSON " + abbreviate(body), e);
+        }
+    }
+
+    /** api.odcloud.kr has no result header: errors are HTTP statuses, rows sit under "data". */
+    PublicDataPage parseOdcloud(Source source, String body) {
+        try {
+            JsonNode root = jsonMapper.readTree(body);
+            JsonNode data = root.path("data");
+            if (!data.isArray()) {
+                throw new PublicDataException(source.name() + ": unexpected response " + abbreviate(body));
+            }
+            List<Map<String, String>> rows = new ArrayList<>();
+            data.forEach(item -> rows.add(flatten(item)));
+            // matchCount is the size of the (possibly filtered) result set being paged
+            return new PublicDataPage(rows, root.path("matchCount").asInt(root.path("totalCount").asInt(0)));
         } catch (JacksonException e) {
             throw new PublicDataException(source.name() + ": invalid JSON " + abbreviate(body), e);
         }

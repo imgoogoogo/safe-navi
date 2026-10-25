@@ -15,9 +15,11 @@ import tools.jackson.databind.json.JsonMapper;
 class PublicDataClientTest {
 
     private final Source json = new Source("cctv-standard", "cctv", "json", "https://example.test", null,
-            "latitude", "longitude", true);
+            "latitude", "longitude", null, true);
+    private final Source odcloud = new Source("police", "police", "odcloud", "https://example.test", "주소",
+            null, null, "주소", true);
     private final Source xml = new Source("emergency-medical", "emergencyMedical", "xml", "https://example.test",
-            "hpid", "wgs84Lat", "wgs84Lon", true);
+            "hpid", "wgs84Lat", "wgs84Lon", null, true);
     private final PublicDataClient client;
 
     PublicDataClientTest() throws Exception {
@@ -38,6 +40,69 @@ class PublicDataClientTest {
         assertThat(page.totalCount()).isEqualTo(1);
         assertThat(page.items()).singleElement()
                 .satisfies(item -> assertThat(item).containsEntry("latitude", "37.5").containsEntry("cameraCount", "2"));
+    }
+
+    @Test
+    void parsesJsonWithoutResponseWrapper() {
+        String body = """
+                {"header":{"resultCode":"00","resultMsg":"NORMAL SERVICE."},
+                 "body":{"items":{"item":[{"latitude":"37.4","longitude":"126.6"}]},
+                 "numOfRows":2,"pageNo":1,"totalCount":2852}}
+                """;
+
+        PublicDataPage page = client.parseJson(json, body);
+
+        assertThat(page.totalCount()).isEqualTo(2852);
+        assertThat(page.items()).singleElement()
+                .satisfies(item -> assertThat(item).containsEntry("latitude", "37.4"));
+    }
+
+    @Test
+    void acceptsSingleZeroResultCode() {
+        String body = """
+                {"response":{"body":{"dataType":"JSON","items":{"item":[{"MNG_NO":"1","WGS84_LAT":"35.1",
+                 "WGS84_LOT":"128.8","KPNG_DAY_CNT":null}]},"numOfRows":100,"pageNo":1,"totalCount":381409},
+                 "header":{"resultCode":"0","resultMsg":"정상"}}}
+                """;
+
+        PublicDataPage page = client.parseJson(json, body);
+
+        assertThat(page.totalCount()).isEqualTo(381409);
+        assertThat(page.items()).singleElement()
+                .satisfies(item -> assertThat(item).containsEntry("MNG_NO", "1").doesNotContainKey("KPNG_DAY_CNT"));
+    }
+
+    @Test
+    void jsonErrorResultCodeIsReported() {
+        String body = """
+                {"header":{"resultCode":"10","resultMsg":"INVALID_REQUEST_PARAMETER_ERROR (numOfRows>1000)"},"body":null}
+                """;
+
+        assertThatThrownBy(() -> client.parseJson(json, body))
+                .isInstanceOf(PublicDataException.class)
+                .hasMessageContaining("resultCode=10");
+    }
+
+    @Test
+    void parsesOdcloudRows() {
+        String body = """
+                {"currentCount":1,"data":[{"경찰서":"경주","관서명":"역전","구분":"파출소","시도청":"경북청","연번":1627,
+                 "주소":"경상북도 경주시 원화로 270"}],"matchCount":22,"page":1,"perPage":1,"totalCount":2047}
+                """;
+
+        PublicDataPage page = client.parseOdcloud(odcloud, body);
+
+        assertThat(page.totalCount()).isEqualTo(22);
+        assertThat(page.items()).singleElement()
+                .satisfies(item -> assertThat(item).containsEntry("주소", "경상북도 경주시 원화로 270")
+                        .containsEntry("연번", "1627"));
+    }
+
+    @Test
+    void odcloudErrorBodyIsReported() {
+        assertThatThrownBy(() -> client.parseOdcloud(odcloud, "{\"code\":-401,\"msg\":\"유효하지 않은 인증키 입니다.\"}"))
+                .isInstanceOf(PublicDataException.class)
+                .hasMessageContaining("unexpected response");
     }
 
     @Test

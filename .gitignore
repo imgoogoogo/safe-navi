@@ -35,3 +35,6 @@ out/
 
 ### VS Code ###
 .vscode/
+
+### OSM extracts (too large for git; pass the path via GRAPH_BUILD_PBF_PATH) ###
+*.osm.pbf

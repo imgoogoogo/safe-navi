@@ -38,6 +38,8 @@ public class SecurityConfig {
                         .accessDeniedHandler(errorResponder.accessDeniedHandler()))
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers("/error", "/ws/**").permitAll()
+                        // Backend smoke-test map (static/map-test.html + GraphDebugController); remove together
+                        .requestMatchers(HttpMethod.GET, "/map-test.html", "/api/debug/graph", "/api/debug/regions").permitAll()
                         .requestMatchers("/api/auth/**").permitAll()
                         .requestMatchers("/api/admin/**").hasRole("ADMIN")
                         .requestMatchers(HttpMethod.GET, "/api/geo/**", "/api/routes", "/api/routes/**",

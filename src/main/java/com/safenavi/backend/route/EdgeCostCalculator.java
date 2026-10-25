@@ -12,33 +12,31 @@ import com.safenavi.backend.facility.FacilityType;
 import com.safenavi.backend.graphbuild.RoadSegment;
 import com.safenavi.backend.route.PresetWeightResolver.Preset;
 import com.safenavi.backend.safety.FacilitySpatialIndex;
-import com.safenavi.backend.safety.SafetyScoreCalculator;
 
 /**
- * edge_cost = distanceMeters * (1 + alpha * danger_penalty), where
- * danger_penalty = clamp(1 - weighted safety score, 0.1, 0.9).
- * The per-type scores do not depend on the preset, so callers running several presets can compute
- * them once with {@link #typeScores} and reuse them with {@link #cost}.
+ * edge_cost = distance * (1 + 1 / (1 + weightedCount)), where weightedCount is the sum of
+ * preset weight * facility count. No facility doubles the distance; each extra facility lowers it.
+ * Counts do not depend on the preset, so {@link #facilityCounts} is computed once per segment
+ * and reused across presets via {@link #cost}.
  */
 @Component
 public class EdgeCostCalculator {
 
-    public static final double MIN_DANGER_PENALTY = 0.1;
-    public static final double MAX_DANGER_PENALTY = 0.9;
-
     public double calculate(RoadSegment segment, Preset preset, FacilitySpatialIndex facilitiesInArea) {
-        return cost(segment, typeScores(segment, facilitiesInArea), preset);
+        return cost(segment, facilityCounts(segment, facilitiesInArea), preset);
     }
 
-    public Map<FacilityType, Double> typeScores(RoadSegment segment, FacilitySpatialIndex facilitiesInArea) {
-        Geometry line = toMeters(segment, facilitiesInArea);
-        return SafetyScoreCalculator.typeScores(facilitiesInArea.countWithinInfluence(line), segment.getDistanceMeters());
+    /** Per-type count of facilities within that type's influence radius of the segment line. */
+    public Map<FacilityType, Integer> facilityCounts(RoadSegment segment, FacilitySpatialIndex facilitiesInArea) {
+        return facilitiesInArea.countWithinInfluence(toMeters(segment, facilitiesInArea));
     }
 
-    public double cost(RoadSegment segment, Map<FacilityType, Double> typeScores, Preset preset) {
-        double safety = SafetyScoreCalculator.weightedAverage(typeScores, preset.weights());
-        double dangerPenalty = SafetyScoreCalculator.clamp(1 - safety, MIN_DANGER_PENALTY, MAX_DANGER_PENALTY);
-        return segment.getDistanceMeters() * (1 + preset.alpha() * dangerPenalty);
+    public double cost(RoadSegment segment, Map<FacilityType, Integer> counts, Preset preset) {
+        double weightedCount = 0;
+        for (Map.Entry<FacilityType, Double> w : preset.weights().entrySet()) {
+            weightedCount += w.getValue() * counts.getOrDefault(w.getKey(), 0);
+        }
+        return segment.getDistanceMeters() * (1 + 1 / (1 + weightedCount));
     }
 
     private Geometry toMeters(RoadSegment segment, FacilitySpatialIndex index) {

@@ -1,0 +1,292 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SafeNavi 지도 테스트</title>
+<!-- 백엔드 동작 확인용 테스트 페이지 (프론트엔드 아님) -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<style>
+  html, body { margin: 0; height: 100%; font-family: -apple-system, "Apple SD Gothic Neo", sans-serif; font-size: 14px; }
+  #map { position: absolute; inset: 0 0 0 340px; }
+  #panel { position: absolute; top: 0; left: 0; bottom: 0; width: 340px; box-sizing: border-box; padding: 14px;
+           overflow-y: auto; background: #fafafa; border-right: 1px solid #ddd; }
+  h1 { font-size: 17px; margin: 0 0 8px; }
+  p.hint { color: #666; margin: 0 0 12px; line-height: 1.5; }
+  select, button { font: inherit; padding: 6px 10px; margin: 2px 0; }
+  button { cursor: pointer; }
+  table { border-collapse: collapse; width: 100%; margin: 8px 0; }
+  td, th { border-bottom: 1px solid #e5e5e5; padding: 5px 4px; text-align: left; }
+  tr.selected { background: #e8f0fe; font-weight: 600; }
+  #status { margin-top: 10px; padding: 8px; border-radius: 6px; background: #fff; border: 1px solid #e5e5e5;
+            white-space: pre-wrap; line-height: 1.5; }
+  #status.error { border-color: #e57373; color: #b71c1c; }
+  #compare tr { cursor: pointer; }
+  #compare tr.hidden td:not(:first-child) { opacity: 0.4; }
+  .swatch { display: inline-block; width: 18px; height: 5px; border-radius: 3px; vertical-align: middle; margin-right: 6px; }
+  .legend span { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin: 0 4px 0 8px; }
+  @media (max-width: 700px) { #panel { width: 100%; bottom: auto; max-height: 45%; } #map { inset: 45% 0 0 0; } }
+</style>
+</head>
+<body>
+<div id="panel">
+  <h1>SafeNavi 지도 테스트</h1>
+  <p class="hint">지도를 두 번 클릭하면 출발지 → 도착지로 경로를 찾습니다. 점선 사각형은 그래프가 빌드된 범위입니다.</p>
+
+  <label>지역
+    <select id="region"></select>
+  </label>
+
+  <button id="reset">출발/도착 초기화</button>
+
+  <div style="margin:10px 0">
+    <label><input type="checkbox" id="showGraph" checked> 도로 · 노드 표시 (줌 15 이상)</label>
+    <div class="legend">
+      <span style="background:#d81b60"></span>교차로(3+)
+      <span style="background:#1e88e5"></span>연결점(2)
+      <span style="background:#9e9e9e"></span>끝점(1)
+    </div>
+    <div id="graphInfo" style="color:#666;margin-top:4px"></div>
+  </div>
+
+  <table id="compare"><thead><tr><th></th><th>프리셋</th><th>거리</th><th>시간</th><th>안전</th></tr></thead><tbody></tbody></table>
+  <p class="hint">프리셋 5개 경로를 색깔별로 함께 그립니다. 체크박스로 켜고 끄고, 줄에 마우스를 올리면 그 경로만 강조됩니다.</p>
+
+  <div>
+    <button id="loadFacilities">현재 화면 시설 표시</button>
+    <button id="loadReports">현재 화면 제보 표시</button>
+  </div>
+  <div class="legend" id="legend"></div>
+  <div id="status">준비됨</div>
+</div>
+<div id="map"></div>
+
+<script>
+// 지역별 예시 경로 (코드에 없는 지역은 지역 중심으로 이동만 함)
+const DEMO_ROUTES = {
+  '11680': { name: '강남구', from: [37.4979, 127.0276], to: [37.5006, 127.0364], zoom: 16 },   // 강남역 → 역삼역
+  '47130': { name: '경주시', from: [35.8380, 129.2110], to: [35.8349, 129.2266], zoom: 16 }    // 대릉원 → 동궁과 월지
+};
+// 프리셋별 경로 색/굵기 — 굵은 선부터 그려서 겹치는 구간이 줄무늬처럼 보이게 한다
+const PRESETS = [
+  { name: 'default', color: '#212121', weight: 12 },
+  { name: 'cctv', color: '#f4511e', weight: 9 },
+  { name: 'streetlight', color: '#fbc02d', weight: 6.5 },
+  { name: 'guardianHouse', color: '#1e88e5', weight: 4 },
+  { name: 'publicSafety', color: '#8e24aa', weight: 2 }
+];
+const hiddenPresets = new Set();
+let routes = [];       // 마지막 탐색 결과 (프리셋 순서)
+let hoverPreset = null;
+const FACILITY_COLORS = { cctv: '#1e88e5', streetlight: '#fbc02d', guardianHouse: '#43a047',
+                          police: '#3949ab', emergencyMedical: '#e53935' };
+
+const map = L.map('map', { preferCanvas: true }).setView([37.4995, 127.032], 16);
+L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  maxZoom: 19, attribution: '&copy; OpenStreetMap contributors'
+}).addTo(map);
+
+const NODE_COLORS = { 1: '#9e9e9e', 2: '#1e88e5' }; // 3+ -> intersection color
+const graphLayer = L.layerGroup().addTo(map); // added first so routes/markers draw on top
+const routeLayer = L.layerGroup().addTo(map);
+const facilityLayer = L.layerGroup().addTo(map);
+const reportLayer = L.layerGroup().addTo(map);
+let origin = null, dest = null;
+
+document.getElementById('legend').innerHTML = Object.entries(FACILITY_COLORS)
+  .map(([t, c]) => `<span style="background:${c}"></span>${t}`).join(' ');
+
+function setStatus(text, isError = false) {
+  const el = document.getElementById('status');
+  el.textContent = text;
+  el.className = isError ? 'error' : '';
+}
+
+async function api(path) {
+  const res = await fetch(path);
+  const body = await res.json();
+  if (!body.success) throw new Error(`${body.error.code}: ${body.error.message}`);
+  return body.data;
+}
+
+function pinIcon(label, color) {
+  return L.divIcon({ className: '', iconSize: [26, 26], iconAnchor: [13, 13],
+    html: `<div style="width:26px;height:26px;border-radius:50%;background:${color};color:#fff;font-weight:700;
+           display:flex;align-items:center;justify-content:center;border:2px solid #fff;box-shadow:0 1px 4px #0006">${label}</div>` });
+}
+
+function redrawEndpoints() {
+  routeLayer.clearLayers();
+  if (origin) L.marker(origin, { icon: pinIcon('출', '#2e7d32') }).bindPopup('출발지').addTo(routeLayer);
+  if (dest) L.marker(dest, { icon: pinIcon('도', '#c62828') }).bindPopup('도착지').addTo(routeLayer);
+}
+
+async function findRoute() {
+  if (!origin || !dest) return;
+  const q = `originLat=${origin.lat}&originLng=${origin.lng}&destLat=${dest.lat}&destLng=${dest.lng}`;
+  setStatus('경로 탐색 중...');
+  try {
+    routes = await Promise.all(PRESETS.map(p => api(`/api/routes?${q}&preset=${p.name}`)));
+    drawRoutes();
+    renderCompare();
+    const first = routes[0].polyline;
+    const shortest = Math.min(...routes.map(r => r.distanceMeters));
+    const best = routes.reduce((a, b) => (b.safetyScore > a.safetyScore ? b : a));
+    setStatus(`최단 ${shortest}m · 안전점수 최고 [${best.preset}] ${best.safetyScore} (${best.distanceMeters}m)\n`
+      + `스냅된 출발 노드 ${first[0].map(v => v.toFixed(5)).join(', ')}`);
+  } catch (e) {
+    routes = [];
+    redrawEndpoints();
+    document.querySelector('#compare tbody').innerHTML = '';
+    setStatus(e.message, true);
+  }
+}
+
+function drawRoutes() {
+  redrawEndpoints();
+  if (!routes.length) return;
+  routes.forEach((route, i) => {
+    const p = PRESETS[i];
+    if (hiddenPresets.has(p.name)) return;
+    const dim = hoverPreset && hoverPreset !== p.name;
+    L.polyline(route.polyline, { color: p.color, weight: hoverPreset === p.name ? Math.max(p.weight, 7) : p.weight,
+      opacity: dim ? 0.15 : 0.9 }).bindTooltip(`${p.name} · ${route.distanceMeters}m · 안전 ${route.safetyScore}`).addTo(routeLayer);
+  });
+  // dashed connectors from the clicked points to where the route actually starts/ends (snapped node)
+  const line = routes[0].polyline;
+  L.polyline([origin, line[0]], { color: '#424242', weight: 2, dashArray: '4 4' }).addTo(routeLayer);
+  L.polyline([dest, line[line.length - 1]], { color: '#424242', weight: 2, dashArray: '4 4' }).addTo(routeLayer);
+}
+
+function renderCompare() {
+  const shortest = Math.min(...routes.map(r => r.distanceMeters));
+  document.querySelector('#compare tbody').innerHTML = routes.map((r, i) => {
+    const p = PRESETS[i];
+    const extra = r.distanceMeters - shortest;
+    return `<tr data-preset="${p.name}" class="${hiddenPresets.has(p.name) ? 'hidden' : ''}">
+      <td><input type="checkbox" ${hiddenPresets.has(p.name) ? '' : 'checked'}></td>
+      <td><span class="swatch" style="background:${p.color}"></span>${p.name}</td>
+      <td>${r.distanceMeters}m${extra ? ` <small>(+${Math.round(extra)})</small>` : ''}</td>
+      <td>${r.estimatedMinutes}분</td><td>${r.safetyScore}</td></tr>`;
+  }).join('');
+}
+
+const compareBody = document.querySelector('#compare tbody');
+compareBody.addEventListener('click', e => {
+  const row = e.target.closest('tr');
+  if (!row) return;
+  const name = row.dataset.preset;
+  hiddenPresets.has(name) ? hiddenPresets.delete(name) : hiddenPresets.add(name);
+  renderCompare();
+  drawRoutes();
+});
+compareBody.addEventListener('mouseover', e => {
+  const name = e.target.closest('tr')?.dataset.preset ?? null;
+  if (name !== hoverPreset) { hoverPreset = name; drawRoutes(); }
+});
+compareBody.addEventListener('mouseleave', () => { hoverPreset = null; drawRoutes(); });
+
+function currentBox() {
+  const b = map.getBounds();
+  return `swLat=${b.getSouth()}&swLng=${b.getWest()}&neLat=${b.getNorth()}&neLng=${b.getEast()}`;
+}
+
+map.on('click', e => {
+  if (!origin || dest) {
+    origin = e.latlng; dest = null; routes = []; redrawEndpoints();
+    document.querySelector('#compare tbody').innerHTML = '';
+    setStatus('도착지를 클릭하세요');
+  } else { dest = e.latlng; findRoute(); }
+});
+document.getElementById('reset').addEventListener('click', () => {
+  origin = dest = null; routes = []; redrawEndpoints();
+  document.querySelector('#compare tbody').innerHTML = '';
+  setStatus('출발지를 클릭하세요');
+});
+
+document.getElementById('loadFacilities').addEventListener('click', async () => {
+  facilityLayer.clearLayers();
+  try {
+    const list = await api(`/api/facilities?${currentBox()}`);
+    list.forEach(f => L.circleMarker([f.lat, f.lng], { radius: 5, color: '#fff', weight: 1,
+      fillColor: FACILITY_COLORS[f.type] || '#999', fillOpacity: 0.9 }).bindPopup(`${f.type} #${f.id}`).addTo(facilityLayer));
+    setStatus(`시설 ${list.length}개 표시` + (list.length === 0 ? '\n(Facility 테이블이 비어 있음 — 공공데이터 동기화 전)' : ''));
+  } catch (e) { setStatus(e.message, true); }
+});
+
+document.getElementById('loadReports').addEventListener('click', async () => {
+  reportLayer.clearLayers();
+  try {
+    const list = await api(`/api/reports?${currentBox()}`);
+    list.forEach(r => L.marker([r.lat, r.lng], { icon: pinIcon('!', '#ef6c00') })
+      .bindPopup(`<b>${r.type}</b> (${r.reviewStatus})<br>${r.summary ?? ''}`).addTo(reportLayer));
+    setStatus(`제보 ${list.length}개 표시`);
+  } catch (e) { setStatus(e.message, true); }
+});
+
+let graphRequest = 0;
+async function loadGraph() {
+  graphLayer.clearLayers();
+  const info = document.getElementById('graphInfo');
+  if (!document.getElementById('showGraph').checked) { info.textContent = ''; return; }
+  if (map.getZoom() < 15) { info.textContent = '줌 15 이상에서 표시됩니다'; return; }
+  const requestId = ++graphRequest;
+  info.textContent = '불러오는 중...';
+  try {
+    const g = await api(`/api/debug/graph?${currentBox()}`);
+    if (requestId !== graphRequest) return; // a newer pan/zoom already started
+    g.segments.forEach(s => L.polyline(s.geometry, { color: '#546e7a', weight: 3, opacity: 0.7 })
+      .bindPopup(`세그먼트 #${s.id}<br>${s.nodeAId} ↔ ${s.nodeBId}<br>${s.distanceMeters}m`).addTo(graphLayer));
+    g.nodes.forEach(n => L.circleMarker([n.lat, n.lng], {
+      radius: n.degree >= 3 ? 4 : 3, color: '#fff', weight: 1,
+      fillColor: n.degree >= 3 ? '#d81b60' : NODE_COLORS[n.degree], fillOpacity: 1 })
+      .bindPopup(`노드 #${n.id}<br>연결 ${n.degree}개<br>${n.lat}, ${n.lng}`).addTo(graphLayer));
+    const intersections = g.nodes.filter(n => n.degree >= 3).length;
+    info.textContent = `세그먼트 ${g.segments.length}개 · 노드 ${g.nodes.length}개 (교차로 ${intersections})`;
+  } catch (e) {
+    if (requestId === graphRequest) info.textContent = e.message;
+  }
+}
+let graphTimer;
+map.on('moveend', () => { clearTimeout(graphTimer); graphTimer = setTimeout(loadGraph, 250); });
+document.getElementById('showGraph').addEventListener('change', loadGraph);
+
+// 빌드된 지역 목록을 받아 범위 사각형을 그리고, 선택한 지역으로 이동한다
+async function loadRegions() {
+  const regions = await api('/api/debug/regions');
+  const select = document.getElementById('region');
+  regions.forEach(r => {
+    L.rectangle([[r.swLat, r.swLng], [r.neLat, r.neLng]], { color: '#555', weight: 1, dashArray: '6 4', fill: false })
+      .bindTooltip(r.regionCode).addTo(map);
+    const name = DEMO_ROUTES[r.regionCode]?.name;
+    select.add(new Option(name ? `${name} (${r.regionCode})` : r.regionCode, r.regionCode));
+  });
+  const requested = new URLSearchParams(location.search).get('region');
+  if (requested && regions.some(r => r.regionCode === requested)) select.value = requested;
+  select.addEventListener('change', () => goToRegion(regions.find(r => r.regionCode === select.value)));
+  if (regions.length) goToRegion(regions.find(r => r.regionCode === select.value));
+  else setStatus('빌드된 지역이 없습니다', true);
+}
+
+function goToRegion(r) {
+  history.replaceState(null, '', `?region=${r.regionCode}`);
+  const demo = DEMO_ROUTES[r.regionCode];
+  document.querySelector('#compare tbody').innerHTML = '';
+  if (demo) {
+    origin = L.latLng(demo.from);
+    dest = L.latLng(demo.to);
+    map.setView([(demo.from[0] + demo.to[0]) / 2, (demo.from[1] + demo.to[1]) / 2], demo.zoom);
+    findRoute();
+  } else {
+    origin = dest = null;
+    redrawEndpoints();
+    map.setView([(r.swLat + r.neLat) / 2, (r.swLng + r.neLng) / 2], 15);
+    setStatus('출발지를 클릭하세요');
+  }
+}
+
+loadRegions().catch(e => setStatus(e.message, true));
+</script>
+</body>
+</html>

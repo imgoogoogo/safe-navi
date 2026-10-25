@@ -1,0 +1,73 @@
+plugins {
+    id 'java'
+    id 'org.springframework.boot' version '4.1.1'
+    id 'io.spring.dependency-management' version '1.1.7'
+}
+
+group = 'com.safenavi'
+version = '0.0.1-SNAPSHOT'
+description = 'safe-navi-project'
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(17)
+    }
+}
+
+repositories {
+    mavenCentral()
+    // osm4j is published only to the topobyte repository
+    maven {
+        url = 'https://mvn.topobyte.de'
+        content { includeGroup 'de.topobyte' }
+    }
+    maven {
+        url = 'https://mvn.slimjars.com'
+        content { includeGroup 'com.slimjars.trove4j' }
+    }
+}
+
+ext {
+    jjwtVersion = '0.13.0'
+    osm4jVersion = '1.4.1'
+    awsSdkVersion = '2.55.6'
+}
+
+dependencyManagement {
+    imports {
+        mavenBom "software.amazon.awssdk:bom:${awsSdkVersion}"
+    }
+}
+
+dependencies {
+    implementation 'org.springframework.boot:spring-boot-starter-webmvc'
+    implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+    implementation 'org.springframework.boot:spring-boot-starter-security'
+    implementation 'org.springframework.boot:spring-boot-starter-websocket'
+    implementation 'org.springframework.boot:spring-boot-starter-validation'
+    // WebClient only (Nominatim, public data APIs); the app itself stays on servlet MVC
+    implementation 'org.springframework.boot:spring-boot-starter-webflux'
+    runtimeOnly 'com.mysql:mysql-connector-j'
+
+    implementation "io.jsonwebtoken:jjwt-api:${jjwtVersion}"
+    runtimeOnly "io.jsonwebtoken:jjwt-impl:${jjwtVersion}"
+    runtimeOnly "io.jsonwebtoken:jjwt-jackson:${jjwtVersion}"
+
+    implementation 'jakarta.xml.bind:jakarta.xml.bind-api'
+    runtimeOnly 'org.glassfish.jaxb:jaxb-runtime'
+
+    implementation "de.topobyte:osm4j-core:${osm4jVersion}"
+    implementation "de.topobyte:osm4j-pbf:${osm4jVersion}"
+    implementation 'org.locationtech.jts:jts-core:1.20.0'
+    implementation 'org.eclipse.collections:eclipse-collections:13.0.0'
+    implementation 'software.amazon.awssdk:s3'
+
+    testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    testImplementation 'org.springframework.boot:spring-boot-starter-webmvc-test'
+    testImplementation 'org.springframework.security:spring-security-test'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+tasks.named('test') {
+    useJUnitPlatform()
+}
